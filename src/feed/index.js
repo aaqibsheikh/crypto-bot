@@ -1,26 +1,33 @@
 const CoinbasePro = require('coinbase-pro')
 const config = require('../../configuration')
 
-class Ticker {
-  constructor({ product, onTick, onError }) {
+const key = config.get('GDAX_API_KEY')
+const secret = config.get('GDAX_API_SECRET')
+const passphrase = config.get('GDAX_API_PASSPHRASE')
+const waUrl = config.get('GDAX_WS_URL')
+
+class Feed {
+  constructor({ product, onUpdate, onError }) {
     this.product = product
-    this.onTick = onTick
+    this.onUpdate = onUpdate
     this.onError = onError
     this.running = false
   }
-  start() {
+
+  async start() {
     this.running = true
     this.client = new CoinbasePro.WebsocketClient(
       [this.product],
-      config.get('GDAX_WS_URL'),
-      null,
-      { channels: ['ticker', 'heartbeat'] }
+      waUrl,
+      { key, secret, passphrase },
+      { channels: ['user', 'heartbeat'] },
     )
 
-    this.client.on('message', async (data) => {
-      if (data.type === 'ticker') {
-        await this.onTick(data)
+    this.client.on('message', (data) => {
+      if (data.type === 'heartbeat') {
+        return
       }
+      this.onUpdate(data)
     })
 
     this.client.on('error', (err) => {
@@ -35,10 +42,10 @@ class Ticker {
     })
   }
 
-  stop() {
+  async stop() {
     this.running = false
     this.client.close()
   }
 }
 
-module.exports = exports = Ticker
+module.exports = exports = Feed

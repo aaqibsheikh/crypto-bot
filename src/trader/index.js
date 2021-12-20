@@ -1,38 +1,66 @@
-const Candlestick = require('../models/candlestick');
-const Runner = require('../runner');
-const Ticker = require('../ticker');
+const Candlestick = require('../models/candlestick')
+const Runner = require('../runner')
+const Broker = require('../broker')
+const Ticker = require('../ticker')
 const randomstring = require('randomstring')
 
 class Trader extends Runner {
   constructor(data) {
     super(data)
+    this.isLive = data.live
+    this.funds = data.funds
+    this.broker = new Broker({ isLive: this.isLive, product: this.product })
     this.ticker = new Ticker({
       product: this.product,
-      onTick: async (tick) => { await this.onTick(tick) },
-      onError: (error) => { this.onError(error) }
+      onTick: async (tick) => {
+        await this.onTick(tick)
+      },
+      onError: (error) => {
+        this.onError(error)
+      },
     })
-
   }
 
-  async start() { 
-      this.currentCandle = null
-      this.history = await this.historical.getData()
-      this.ticker.start()
+  async start() {
+    this.currentCandle = null
+    this.history = await this.historical.getData()
+    this.ticker.start()
+    this.broker.start()
   }
 
-  async onBuySignal({price, time}) {
+  async onBuySignal({ price, time }) {
     console.log(`BUY BUY BUY ${price}`)
-    const id = randomstring.generate(20)
-    this.strategy.positionOpened({price, time, size: 1.0, id})
-  } 
+    const result = await this.broker.buy({ funds: this.funds, price })
 
-  async onSellSignal({price, size, time, position}) {
+    if (!result) {
+      return
+    }
+
+    const id = randomstring.generate(20)
+    this.strategy.positionOpened({
+      price: result.price,
+      time,
+      size: result.size,
+      id,
+    })
+  }
+
+  async onSellSignal({ price, size, time, position }) {
     console.log(`SELL SELL SELL ${price}`)
-    this.strategy.positionClosed({price, time, size, id: position.id})
+    const result = await this.broker.sell({ size, price })
+    if (!result) {
+      return
+    }
+    this.strategy.positionClosed({
+      price: result.price,
+      time,
+      size: result.size,
+      id: position.id,
+    })
   }
 
   async onTick(tick) {
-    const parsed = Date.parse(tick.time) 
+    const parsed = Date.parse(tick.time)
     const time = isNaN(parsed) ? new Date() : new Date(parsed)
     const price = parseFloat(tick.price)
     const volume = parseFloat(tick.last_size)
@@ -40,31 +68,29 @@ class Trader extends Runner {
     console.log(`Time: ${time} | Price: ${price} | Volume: ${volume}`)
 
     try {
-
-      if(this.currentCandle) {
-        this.currentCandle.onPrice({price, volume, time})
+      if (this.currentCandle) {
+        this.currentCandle.onPrice({ price, volume, time })
       } else {
         this.currentCandle = new Candlestick({
           price: price,
           volume: volume,
           interval: this.interval,
-          startTime: time
+          startTime: time,
         })
       }
 
       const sticks = this.history.slice()
       sticks.push(this.currentCandle)
 
-      await this.strategy.run({sticks, time})
+      await this.strategy.run({ sticks, time })
 
-      if(this.currentCandle.state === 'closed') {
+      if (this.currentCandle.state === 'closed') {
         const candle = this.currentCandle
         this.currentCandle = null
         this.history.push(candle)
 
         this.printPositions()
       }
-
     } catch (error) {
       console.log(error)
     }
